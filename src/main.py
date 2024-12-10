@@ -4,7 +4,6 @@ import multiprocessing
 import os
 import sys
 import threading
-import time
 import webbrowser
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,6 +16,8 @@ import wx.adv
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.join(sys._MEIPASS, "src")
@@ -70,16 +71,12 @@ def get_times() -> SapResponse:
     options.add_argument("--log-level=3")
     options.add_argument("--silent")
     with webdriver.Edge(options=options) as driver:
-        driver.implicitly_wait(10)
         driver.get(PAGE_URL)
-        driver.find_element(By.PARTIAL_LINK_TEXT, "My Time Events").click()
-        time.sleep(3)
-        driver.find_element(By.XPATH, '//*[@id="__xmlview0--overview-text"]').click()
-        time.sleep(2)
-        table_html = driver.find_element(
-            By.XPATH,
-            "/html/body/div[2]/div/div/div/div/div[2]/div/section/div/div[2]/div[2]/div/div/div/div/div/div[2]/div/div/section/div[2]/div[2]/div/div/div[3]/div",
-        )
+        driver.implicitly_wait(2)
+        WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.PARTIAL_LINK_TEXT, "My Time Events"))).click()
+        WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.XPATH, '//*[@id="__xmlview0--overview-text"]'))).click()
+        WebDriverWait(driver, 2).until(EC.invisibility_of_element_located((By.XPATH, "//*[contains(text(), 'No data')]")))
+        table_html = driver.find_element(By.ID, "__xmlview0--idEventsTable")
         string_buffer = StringIO(table_html.get_attribute("outerHTML"))
 
     df = pd.read_html(string_buffer)[0]
@@ -259,7 +256,7 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
 
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.update_data, self.timer)
-        self.timer.Start(10 * 1000)
+        self.timer.Start(1 * 1000)
 
     def CreatePopupMenu(self):
         menu = wx.Menu()
@@ -272,11 +269,10 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
         self.Bind(wx.EVT_MENU, self.on_sync, sync_item)
         self.Bind(wx.EVT_MENU, self.on_view_source, view_source)
         self.Bind(wx.EVT_MENU, self.on_exit, exit_item)
-
         return menu
 
     def on_sync(self, event):
-        self.parent.on_synchronize(event)
+        wx.CallAfter(self.parent.on_synchronize, event)
 
     def on_view_source(self, event):
         webbrowser.open(PAGE_URL)
@@ -289,7 +285,7 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
             overtime=self.parent.overtime_value.GetLabel(),
             entries=self.parent.entries_value.GetLabel(),
         )
-        self.SetIcon(self.icon, description)
+        wx.CallAfter(self.SetIcon, self.icon, description)
 
     def on_restore(self, event):
         self.parent.restore_from_tray()
