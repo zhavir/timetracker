@@ -26,7 +26,6 @@ else:
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 ICON_PATH = os.path.join(BASE_DIR, "favicon.ico")
-TIMEOUT = 600
 PAGE_URL = os.environ["PAGE_URL"]
 
 
@@ -143,7 +142,7 @@ class TimeTrackerApp(wx.Frame):
         self.entries_value = wx.StaticText(self.panel, label="0", pos=(120, 130))
 
         self.update_button = wx.Button(self.panel, label="Synchronize", pos=(45, 160))
-        self.update_button.Bind(wx.EVT_BUTTON, self.on_synchronize)
+        self.update_button.Bind(wx.EVT_BUTTON, self.button_synchronize)
 
         self.link = wx.adv.HyperlinkCtrl(self.panel, id=wx.ID_ANY, label="View Source", url=PAGE_URL, pos=(65, 190))
 
@@ -151,34 +150,34 @@ class TimeTrackerApp(wx.Frame):
 
         self.tray_icon = TimeTrackerTrayIcon(self)
 
-        self.stop_event = threading.Event()
-        self.update_thread = threading.Thread(target=self.update_data, daemon=True)
-        self.update_thread.start()
+        self.timer_update_data = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_synchronize, self.timer_update_data)
+        self.timer_update_data.Start(60 * 60 * 1000)
 
-        self.update_thread = threading.Thread(target=self.visual_clock, daemon=True)
-        self.update_thread.start()
+        self.timer_visual_clock = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.visual_clock, self.timer_visual_clock)
+        self.timer_visual_clock.Start(1 * 1000)
 
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
-    def visual_clock(self):
+        wx.CallAfter(self.button_synchronize, None)
+
+    def visual_clock(self, event):
         time_format = "%H:%M:%S"
-        while not self.stop_event.is_set():
-            if self.working_status_value.GetLabel() != WorkingStatus.resting:
-                worked_time = dt.datetime.strptime(self.worked_time_value.GetLabel(), time_format) + dt.timedelta(seconds=1)
+        if self.working_status_value.GetLabel() != WorkingStatus.resting:
+            worked_time = dt.datetime.strptime(self.worked_time_value.GetLabel(), time_format) + dt.timedelta(seconds=1)
 
-                left_time = dt.datetime.strptime(self.left_time_value.GetLabel(), time_format)
-                if left_time.time() > dt.time():
-                    left_time -= dt.timedelta(seconds=1)
+            left_time = dt.datetime.strptime(self.left_time_value.GetLabel(), time_format)
+            if left_time.time() > dt.time():
+                left_time -= dt.timedelta(seconds=1)
 
-                overtime = dt.datetime.strptime(self.overtime_value.GetLabel(), time_format)
-                if overtime.time() > dt.time() or left_time.time() == dt.time():
-                    overtime += dt.timedelta(seconds=1)
+            overtime = dt.datetime.strptime(self.overtime_value.GetLabel(), time_format)
+            if overtime.time() > dt.time() or left_time.time() == dt.time():
+                overtime += dt.timedelta(seconds=1)
 
-                wx.CallAfter(self.worked_time_value.SetLabel, worked_time.strftime(time_format))
-                wx.CallAfter(self.left_time_value.SetLabel, left_time.strftime(time_format))
-                wx.CallAfter(self.overtime_value.SetLabel, overtime.strftime(time_format))
-            if self.stop_event.wait(1):
-                break
+            wx.CallAfter(self.worked_time_value.SetLabel, worked_time.strftime(time_format))
+            wx.CallAfter(self.left_time_value.SetLabel, left_time.strftime(time_format))
+            wx.CallAfter(self.overtime_value.SetLabel, overtime.strftime(time_format))
 
     def fetch_time_data(self):
         try:
@@ -206,33 +205,27 @@ class TimeTrackerApp(wx.Frame):
         wx.CallAfter(self.working_status_value.SetLabel, sap_response.working_status)
         wx.CallAfter(self.entries_value.SetLabel, sap_response.entries_number)
 
-    def update_data(self):
-        while not self.stop_event.is_set():
-            self.on_synchronize(None)
-            if self.stop_event.wait(TIMEOUT):
-                break
+    def button_synchronize(self, event):
+        threading.Thread(target=self.on_synchronize, args=(None,), daemon=True).start()
 
     def on_synchronize(self, event):
-        def _update_detached():
-            response = self.fetch_time_data()
-            self.update_gui(response)
-            self.update_button.Enable()
-            self.update_button.SetLabel("Synchronize")
-            self.update_button.Fit()
-
         self.update_button.Disable()
         self.update_button.SetLabel("Synchronizing...")
         self.update_button.Fit()
         if not self._update_running:
             self._update_running = True
-            thread = threading.Thread(target=_update_detached, daemon=True)
-            thread.start()
+            response = self.fetch_time_data()
+            self.update_gui(response)
+            self.update_button.Enable()
+            self.update_button.SetLabel("Synchronize")
+            self.update_button.Fit()
             self._update_running = False
 
     def on_exit(self, event):
-        self.stop_event.set()
-        if self.update_thread.is_alive():
-            self.update_thread.join()
+        self.timer_visual_clock.Stop()
+        self.timer_update_data.Stop()
+        self.tray_icon.RemoveIcon()
+        self.tray_icon.Destroy()
         self.Destroy()
 
     def minimize_to_tray(self):
@@ -264,9 +257,9 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
         self.Bind(wx.adv.EVT_TASKBAR_LEFT_DOWN, self.on_restore)
         self.Bind(wx.adv.EVT_TASKBAR_RIGHT_UP, self.show_menu)
 
-        self.stop_event = threading.Event()
-        self.update_thread = threading.Thread(target=self.update_data, daemon=True)
-        self.update_thread.start()
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.update_data, self.timer)
+        self.timer.Start(10 * 1000)
 
     def CreatePopupMenu(self):
         menu = wx.Menu()
@@ -288,27 +281,20 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
     def on_view_source(self, event):
         webbrowser.open(PAGE_URL)
 
-    def update_data(self):
-        while not self.stop_event.is_set():
-            description = self.description_template.format(
-                working_status=self.parent.working_status_value.GetLabel(),
-                worked_time=self.parent.worked_time_value.GetLabel(),
-                left_time=self.parent.left_time_value.GetLabel(),
-                overtime=self.parent.overtime_value.GetLabel(),
-                entries=self.parent.entries_value.GetLabel(),
-            )
-            self.SetIcon(self.icon, description)
-            if self.stop_event.wait(10):
-                break
+    def update_data(self, event):
+        description = self.description_template.format(
+            working_status=self.parent.working_status_value.GetLabel(),
+            worked_time=self.parent.worked_time_value.GetLabel(),
+            left_time=self.parent.left_time_value.GetLabel(),
+            overtime=self.parent.overtime_value.GetLabel(),
+            entries=self.parent.entries_value.GetLabel(),
+        )
+        self.SetIcon(self.icon, description)
 
     def on_restore(self, event):
         self.parent.restore_from_tray()
 
     def on_exit(self, event):
-        self.stop_event.set()
-        if self.update_thread.is_alive():
-            self.update_thread.join()
-
         wx.CallAfter(self.Destroy)
         self.parent.on_exit(event)
         wx.CallAfter(wx.GetApp().ExitMainLoop)
@@ -317,13 +303,22 @@ class TimeTrackerTrayIcon(wx.adv.TaskBarIcon):
         self.PopupMenu(self.CreatePopupMenu())
 
 
-if __name__ == "__main__":
+def main():
     multiprocessing.freeze_support()
     multiprocessing.set_executable(os.path.abspath(__file__))
-    app = wx.App()
-    frame = TimeTrackerApp(None)
-    frame.Show()
+    app = wx.App(False)
+
+    checker = wx.SingleInstanceChecker()
+    if checker.IsAnotherRunning():
+        wx.MessageBox("Another instance of the app is already running.", "Error", wx.ICON_ERROR)
+        return
+
+    TimeTrackerApp(None)
     app.MainLoop()
     del app
+
+
+if __name__ == "__main__":
+    main()
 
 # %%
