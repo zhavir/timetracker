@@ -93,7 +93,7 @@ def get_times() -> SapResponse:
         sorted_group = sorted(group)
         timedeltas.append(sorted_group[1] - sorted_group[0])
 
-    worked_time: str = sum(timedeltas, pd.Timedelta(0))
+    worked_time = sum(timedeltas, pd.Timedelta(0))
     left_time = pd.Timedelta(hours=8) - worked_time
     overtime = pd.Timedelta(seconds=0)
     if left_time < pd.Timedelta(seconds=0):
@@ -169,7 +169,7 @@ class TimeTrackerApp(wx.Frame):
                 left_time -= dt.timedelta(seconds=1)
 
             overtime = dt.datetime.strptime(self.overtime_value.GetLabel(), time_format)
-            if overtime.time() > dt.time() or left_time.time() == dt.time():
+            if left_time.time() == dt.time():
                 overtime += dt.timedelta(seconds=1)
 
             wx.CallAfter(self.worked_time_value.SetLabel, worked_time.strftime(time_format))
